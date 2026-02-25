@@ -11,6 +11,19 @@ async function checkService(url: string): Promise<{ isUp: boolean; statusCode: n
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(url, { signal: controller.signal, cache: 'no-store' });
     clearTimeout(timeoutId);
+    // Try to parse JSON body — .NET health endpoints sometimes return 503
+    // even when the body says {"status":"Healthy"}
+    try {
+      const json = await res.json();
+      if (json?.status === 'Healthy') {
+        return { isUp: true, statusCode: res.status, duration: Date.now() - start };
+      }
+      if (json?.status === 'Unhealthy' || json?.status === 'Degraded') {
+        return { isUp: false, statusCode: res.status, duration: Date.now() - start };
+      }
+    } catch {
+      // Not JSON — fall through to HTTP status
+    }
     return { isUp: res.ok, statusCode: res.status, duration: Date.now() - start };
   } catch {
     return { isUp: false, statusCode: 0, duration: Date.now() - start };

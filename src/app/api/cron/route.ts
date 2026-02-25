@@ -25,11 +25,22 @@ export async function GET() {
                     });
                     clearTimeout(timeoutId);
 
+                    // Parse JSON body: .NET health endpoints sometimes return 503
+                    // even when body says {"status":"Healthy"}
+                    let isUp = res.ok;
+                    try {
+                        const json = await res.json();
+                        if (json?.status === 'Healthy') isUp = true;
+                        else if (json?.status === 'Unhealthy' || json?.status === 'Degraded') isUp = false;
+                    } catch {
+                        // Not JSON — use HTTP status
+                    }
+
                     return {
                         serviceName: service.name,
                         envName: env.name,
                         url: env.url,
-                        status: res.ok ? 'UP' : 'DOWN',
+                        status: isUp ? 'UP' : 'DOWN',
                         statusCode: res.status,
                         duration: Date.now() - start,
                         timestamp: new Date().toISOString(),
