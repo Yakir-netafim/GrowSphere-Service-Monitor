@@ -15,7 +15,7 @@ jobs:
         run: |
           echo "Triggering health check at $(date)"
           curl -s -o response.json -w "%{http_code}" \
-            https://grow-sphere-service-monitor.vercel.app/api/cron \
+            "https://grow-sphere-service-monitor.vercel.app/api/cron?source=github&token=${{ secrets.CRON_SECRET }}" \
             > status_code.txt
           
           STATUS=$(cat status_code.txt)

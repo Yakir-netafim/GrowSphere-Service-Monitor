@@ -116,3 +116,46 @@ export async function sendTeamsAlert({ serviceName, failingEnvs }: GroupedAlertP
     }
 }
 
+export async function sendTeamsRecoveryAlert({ serviceName, recoveredEnvs }: { serviceName: string; recoveredEnvs: { envName: string; url: string }[] }) {
+    const webhookUrl = process.env.TEAMS_WEBHOOK_URL;
+    if (!webhookUrl) return;
+
+    const facts = recoveredEnvs.flatMap(env => [
+        { name: `Environment: ${env.envName}`, value: `Status: UP ✅` },
+    ]);
+    // Add timestamp as a separate fact
+    facts.push({ name: 'Time', value: new Date().toLocaleString('he-IL') });
+
+    const card = {
+        '@type': 'MessageCard',
+        '@context': 'http://schema.org/extensions',
+        themeColor: '22c55e', // Green
+        summary: `${serviceName} has RECOVERED in ${recoveredEnvs.map(e => e.envName).join(', ')}`,
+        sections: [
+            {
+                activityTitle: `✅ Service Recovered: **${serviceName}**`,
+                activitySubtitle: recoveredEnvs.length > 1
+                    ? `Recovered in **${recoveredEnvs.length} environments**`
+                    : `Environment: **${recoveredEnvs[0].envName}**`,
+                facts: facts,
+                markdown: true,
+            },
+        ],
+        potentialAction: recoveredEnvs.map(env => ({
+            '@type': 'OpenUri',
+            name: `Check ${env.envName} Health`,
+            targets: [{ os: 'default', uri: env.url }],
+        })),
+    };
+
+    try {
+        await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(card),
+        });
+        console.log(`✅ Teams recovery alert sent for ${serviceName}`);
+    } catch (error) {
+        console.error('❌ Failed to send Teams recovery alert:', error);
+    }
+}
