@@ -192,6 +192,9 @@ export const services: ServiceConfig[] = [
         environments: [
             { name: 'Dev1', url: 'https://remotesensing-dev1.k8s.growsphere.netafim.com/health' },
             { name: 'Dev2', url: 'https://remotesensing-dev2.k8s.growsphere.netafim.com/health' },
+            { name: 'QA1', url: 'https://remotesensing-qa1.k8s.growsphere.netafim.com/health' },
+            { name: 'STAG', url: 'https://remotesensing-stag.k8s.growsphere.netafim.com/health' },
+            { name: 'PROD', url: 'https://remotesensing.k8s.growsphere.netafim.com/health' },
         ],
     },
 ];
