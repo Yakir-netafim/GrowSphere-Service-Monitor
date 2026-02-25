@@ -1,0 +1,28 @@
+name: Health Check - Every 10 Minutes
+
+on:
+  schedule:
+    # Runs every 10 minutes
+    - cron: '*/10 * * * *'
+  # Allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
+
+jobs:
+  trigger-health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Vercel Cron
+        run: |
+          echo "Triggering health check at $(date)"
+          curl -s -o response.json -w "%{http_code}" \
+            https://grow-sphere-service-monitor.vercel.app/api/cron \
+            > status_code.txt
+          
+          STATUS=$(cat status_code.txt)
+          echo "Response status: $STATUS"
+          cat response.json
+          
+          if [ "$STATUS" != "200" ]; then
+            echo "Health check endpoint returned non-200 status: $STATUS"
+            exit 1
+          fi
