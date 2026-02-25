@@ -7,12 +7,7 @@ import { CheckResult } from '@/app/types';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-export async function GET(request: Request) {
-    // Optional: Protect the cron endpoint with a secret
-    const authHeader = request.headers.get('authorization');
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-        return new NextResponse('Unauthorized', { status: 401 });
-    }
+export async function GET() {
 
     const checks: Array<() => Promise<CheckResult>> = [];
 

@@ -104,10 +104,10 @@ export const services: ServiceConfig[] = [
         id: 'api-gateway',
         name: 'API Gateway',
         environments: [
-            { name: 'Dev1', url: 'https://app-netbeatvx-apigateway-dev1.azurewebsites.net/health' },
-            { name: 'QA1', url: 'https://app-netbeatvx-apigateway-qa1.azurewebsites.net/health' },
-            { name: 'STAG', url: 'https://app-netbeatvx-apigateway-stag.azurewebsites.net/health' },
-            { name: 'PROD', url: 'https://app-netbeatvx-apigateway-prod.azurewebsites.net/health' },
+            { name: 'Dev2', url: 'https://apigateway-dev2.k8s.growsphere.netafim.com/health' },
+            { name: 'QA1', url: 'https://apigateway-qa1.k8s.growsphere.netafim.com/health' },
+            { name: 'STAG', url: 'https://apigateway-stag.k8s.growsphere.netafim.com/health' },
+            { name: 'PROD', url: 'https://apigateway.k8s.growsphere.netafim.com/health' },
         ],
     },
     {

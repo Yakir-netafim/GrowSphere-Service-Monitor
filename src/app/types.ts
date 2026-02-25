@@ -1,4 +1,4 @@
-export type EnvName = 'Dev1' | 'QA1' | 'STAG' | 'PROD';
+export type EnvName = 'Dev1' | 'Dev2' | 'QA1' | 'STAG' | 'PROD';
 
 export interface ServiceEnv {
   name: EnvName;

@@ -6,7 +6,7 @@ import { CheckCircle, XCircle, Activity, RefreshCw, Filter, RotateCcw } from 'lu
 import { ServiceConfig } from '@/app/types';
 import clsx from 'clsx';
 
-type EnvName = 'Dev1' | 'QA1' | 'STAG' | 'PROD';
+type EnvName = 'Dev1' | 'Dev2' | 'QA1' | 'STAG' | 'PROD';
 
 interface ServiceResult {
     serviceId: string;
@@ -26,12 +26,13 @@ interface Props {
 
 const ENV_STYLES: Record<string, { badge: string }> = {
     Dev1: { badge: 'bg-blue-500/20 text-blue-300 border-blue-500/30' },
+    Dev2: { badge: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30' },
     QA1: { badge: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30' },
     STAG: { badge: 'bg-orange-500/20 text-orange-300 border-orange-500/30' },
     PROD: { badge: 'bg-purple-500/20 text-purple-300 border-purple-500/30' },
 };
 
-const ALL_ENVS: EnvName[] = ['Dev1', 'QA1', 'STAG', 'PROD'];
+const ALL_ENVS: EnvName[] = ['Dev1', 'Dev2', 'QA1', 'STAG', 'PROD'];
 
 // Auto-refresh the page data every 60 seconds
 const REFRESH_INTERVAL_SECONDS = 60;
