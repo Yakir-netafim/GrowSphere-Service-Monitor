@@ -11,9 +11,13 @@ export async function GET(request: Request) {
     const startOverall = Date.now();
     const url = new URL(request.url);
 
-    // 1. Authentication
+    // 1. Authentication - support both Vercel (Authorization header) and GitHub Actions (token param)
     const token = url.searchParams.get('token');
-    if (process.env.CRON_SECRET && token !== process.env.CRON_SECRET) {
+    const authHeader = request.headers.get('authorization');
+    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const secret = process.env.CRON_SECRET;
+
+    if (secret && token !== secret && bearerToken !== secret) {
         return new NextResponse('Unauthorized', { status: 401 });
     }
 
