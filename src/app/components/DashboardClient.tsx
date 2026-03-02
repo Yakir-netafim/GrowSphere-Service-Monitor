@@ -368,7 +368,7 @@ export default function DashboardClient({ services, results, lastCheck }: Props)
                 )}
 
                 <footer className="mt-12 text-center text-xs text-slate-600 border-t border-slate-800 pt-6">
-                    Netafim GrowSphere — Service Health Monitor · Alerts sent to yakir.moshe@netafim.com · Cron runs hourly
+                    Netafim GrowSphere — Service Health Monitor · Alerts sent to Teams channel: growsphere-service-health · Scheduled every 10m
                 </footer>
             </div>
         </main>
