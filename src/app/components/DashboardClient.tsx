@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { CheckCircle, XCircle, Activity, RefreshCw, Filter, RotateCcw } from 'lucide-react';
-import { ServiceConfig } from '@/app/types';
+import { CheckCircle, XCircle, Activity, RefreshCw, Filter, RotateCcw, AlertTriangle, Database, Zap } from 'lucide-react';
+import { ServiceConfig, InsightsResult } from '@/app/types';
 import clsx from 'clsx';
 
 type EnvName = 'Dev1' | 'Dev2' | 'QA1' | 'STAG' | 'PROD';
@@ -22,6 +22,134 @@ interface Props {
     services: ServiceConfig[];
     results: ServiceResult[];
     lastCheck: string | null;
+}
+
+// ── Insights hook — fetches AI data lazily per service ────────────────────────
+function useInsights(service: ServiceConfig): InsightsResult | null {
+    const [data, setData] = useState<InsightsResult | null>(null);
+
+    const appIds = service.appInsightsIds;
+    // Pick PROD first, then STAG, then whatever is available
+    const appId = appIds?.PROD ?? appIds?.STAG ?? appIds?.QA1 ?? appIds?.Dev1 ?? null;
+
+    const fetchInsights = useCallback(async () => {
+        if (!appId) return;
+        try {
+            const res = await fetch(`/api/insights?appId=${appId}`);
+            if (res.ok) setData(await res.json());
+        } catch {
+            // silent — insights are supplementary
+        }
+    }, [appId]);
+
+    useEffect(() => {
+        fetchInsights();
+        // Refresh insights every 5 minutes
+        const id = setInterval(fetchInsights, 5 * 60 * 1000);
+        return () => clearInterval(id);
+    }, [fetchInsights]);
+
+    return data;
+}
+
+// ── Insights panel component ──────────────────────────────────────────────────
+function InsightsPanel({ service }: { service: ServiceConfig }) {
+    const insights = useInsights(service);
+
+    // No App ID configured for this service
+    if (!service.appInsightsIds || Object.keys(service.appInsightsIds).length === 0) return null;
+
+    // Still loading
+    if (!insights) {
+        return (
+            <div className="mt-3 pt-3 border-t border-slate-800/60">
+                <div className="flex items-center gap-1.5 text-xs text-slate-600 animate-pulse">
+                    <Zap className="w-3 h-3" />
+                    <span>Loading App Insights…</span>
+                </div>
+            </div>
+        );
+    }
+
+    // Credentials not configured
+    if (!insights.available) {
+        return (
+            <div className="mt-3 pt-3 border-t border-slate-800/60">
+                <div className="flex items-center gap-1.5 text-xs text-slate-700">
+                    <Zap className="w-3 h-3" />
+                    <span>Insights: credentials needed</span>
+                </div>
+            </div>
+        );
+    }
+
+    const { failedRequests24h, totalRequests24h, errorRate, topException, topDependencyFailure } = insights;
+    const hasIssues = failedRequests24h > 0 || !!topDependencyFailure;
+
+    return (
+        <div className="mt-3 pt-3 border-t border-slate-800/60">
+            <div className="flex items-center gap-1.5 mb-2">
+                <Zap className="w-3 h-3 text-blue-400" />
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">App Insights · PROD · 24h</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+                {/* Error rate */}
+                <div className={clsx(
+                    'rounded-lg px-2.5 py-2 text-center',
+                    errorRate === 0 ? 'bg-green-500/10' : errorRate < 5 ? 'bg-yellow-500/10' : 'bg-red-500/15'
+                )}>
+                    <div className={clsx(
+                        'text-lg font-bold tabular-nums',
+                        errorRate === 0 ? 'text-green-400' : errorRate < 5 ? 'text-yellow-400' : 'text-red-400'
+                    )}>{errorRate}%</div>
+                    <div className="text-xs text-slate-500">error rate</div>
+                </div>
+
+                {/* Failed requests */}
+                <div className={clsx(
+                    'rounded-lg px-2.5 py-2 text-center',
+                    failedRequests24h === 0 ? 'bg-green-500/10' : 'bg-red-500/15'
+                )}>
+                    <div className={clsx(
+                        'text-lg font-bold tabular-nums',
+                        failedRequests24h === 0 ? 'text-green-400' : 'text-red-400'
+                    )}>{failedRequests24h.toLocaleString()}</div>
+                    <div className="text-xs text-slate-500">failed req</div>
+                </div>
+
+                {/* Total requests */}
+                <div className="bg-slate-800/40 rounded-lg px-2.5 py-2 text-center">
+                    <div className="text-lg font-bold tabular-nums text-slate-300">{totalRequests24h.toLocaleString()}</div>
+                    <div className="text-xs text-slate-500">total req</div>
+                </div>
+            </div>
+
+            {/* Exception / Dependency row */}
+            {(topException || topDependencyFailure) && (
+                <div className="mt-2 space-y-1">
+                    {topException && (
+                        <div className="flex items-center gap-1.5 text-xs text-yellow-400/80 bg-yellow-500/5 rounded px-2 py-1">
+                            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+                            <span className="truncate" title={topException}>{topException}</span>
+                        </div>
+                    )}
+                    {topDependencyFailure && (
+                        <div className="flex items-center gap-1.5 text-xs text-orange-400/80 bg-orange-500/5 rounded px-2 py-1">
+                            <Database className="w-3 h-3 flex-shrink-0" />
+                            <span className="truncate">{topDependencyFailure} failures</span>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {!hasIssues && (
+                <div className="flex items-center gap-1.5 mt-2 text-xs text-green-500/70">
+                    <CheckCircle className="w-3 h-3" />
+                    <span>No errors in last 24h</span>
+                </div>
+            )}
+        </div>
+    );
 }
 
 const ENV_STYLES: Record<string, { badge: string }> = {
@@ -361,6 +489,9 @@ export default function DashboardClient({ services, results, lastCheck }: Props)
                                             );
                                         })}
                                     </div>
+
+                                    {/* Application Insights panel */}
+                                    <InsightsPanel service={service} />
                                 </div>
                             );
                         })}

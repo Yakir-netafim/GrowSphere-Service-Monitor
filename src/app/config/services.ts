@@ -196,5 +196,9 @@ export const services: ServiceConfig[] = [
             { name: 'STAG', url: 'https://remotesensing-stag.k8s.growsphere.netafim.com/health' },
             { name: 'PROD', url: 'https://remotesensing.k8s.growsphere.netafim.com/health' },
         ],
+        // Application Insights App IDs — add more envs as DevOps provides them
+        appInsightsIds: {
+            PROD: '4154b42d-c60b-4052-8b98-0462a2f445c7',
+        },
     },
 ];

@@ -9,6 +9,8 @@ export interface ServiceConfig {
   id: string;
   name: string;
   environments: ServiceEnv[];
+  /** Application Insights App IDs per environment (optional) */
+  appInsightsIds?: Partial<Record<EnvName, string>>;
 }
 
 export interface CheckResult {
@@ -20,3 +22,21 @@ export interface CheckResult {
   duration: number;
   timestamp: string;
 }
+
+/** Returned by /api/insights */
+export interface InsightsSummary {
+  available: true;
+  failedRequests24h: number;
+  totalRequests24h: number;
+  errorRate: number;
+  topException: string | null;
+  topDependencyFailure: string | null;
+}
+
+export interface InsightsUnavailable {
+  available: false;
+  reason: string;
+}
+
+export type InsightsResult = InsightsSummary | InsightsUnavailable;
+
