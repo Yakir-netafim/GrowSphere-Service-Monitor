@@ -146,11 +146,11 @@ export const services: ServiceConfig[] = [
         id: 'report-api',
         name: 'Report API',
         environments: [
-            { name: 'Dev1', url: 'https://dev1-netbeatvx-reportapi-app-weu.azurewebsites.net/health' },
-            { name: 'Dev2', url: 'https://dev2-netbeatvx-reportapi-app-weu.azurewebsites.net/health' },
-            { name: 'QA1', url: 'https://qa1-netbeatvx-reportapi-app-weu.azurewebsites.net/health' },
-            { name: 'STAG', url: 'https://stag-netbeatvx-reportapi-app-weu.azurewebsites.net/health' },
-            { name: 'PROD', url: 'https://prod-netbeatvx-reportapi-app-weu.azurewebsites.net/health' },
+            { name: 'Dev1', url: 'https://reportapi-dev1.k8s.growsphere.netafim.com/health' },
+            { name: 'Dev2', url: 'https://reportapi-dev2.k8s.growsphere.netafim.com/health' },
+            { name: 'QA1', url: 'https://reportapi-qa1.k8s.growsphere.netafim.com/health' },
+            { name: 'STAG', url: 'https://reportapi-stag.k8s.growsphere.netafim.com/health' },
+            { name: 'PROD', url: 'https://reportapi.k8s.growsphere.netafim.com/health' },
         ],
     },
     {
