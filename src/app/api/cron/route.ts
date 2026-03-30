@@ -98,6 +98,10 @@ export async function GET(request: Request) {
         .map(r => r.value);
 
     // 4. Alerting Logic (Failures + Recoveries)
+    // Uses a double-confirmation pattern:
+    //   Run 1: Service is DOWN → saved as "pending" in KV, no alert sent yet
+    //   Run 2: Service is still DOWN → confirmed! Teams alert sent
+    //   If service recovers while pending → pending cleared, no alert (false alarm avoided)
     const serviceGroups = allResults.reduce((acc, result) => {
         if (!acc[result.serviceName]) acc[result.serviceName] = [];
         acc[result.serviceName].push(result);
@@ -113,35 +117,50 @@ export async function GET(request: Request) {
 
         // Handle DOWN environments
         if (downEnvs.length > 0) {
-            const newFailingEnvs: typeof downEnvs = [];
+            const confirmedFailingEnvs: typeof downEnvs = [];
 
             for (const result of downEnvs) {
                 downServices.push(result);
-                const redisKey = `alert:down:${result.serviceName}:${result.envName}`;
+                const alertKey    = `alert:down:${result.serviceName}:${result.envName}`;
+                const pendingKey  = `alert:pending:${result.serviceName}:${result.envName}`;
 
                 try {
-                    let alreadySent = false;
-                    if (hasKV) {
-                        alreadySent = await kv.get(redisKey) === 'true';
+                    if (!hasKV) {
+                        // No KV — send immediately (legacy behaviour)
+                        confirmedFailingEnvs.push(result);
+                        continue;
                     }
 
-                    if (!alreadySent) {
-                        newFailingEnvs.push(result);
-                        if (hasKV) {
-                            // Expire tomorrow to re-alert if still down
-                            await kv.set(redisKey, 'true', { ex: 86400 });
-                        }
+                    const alreadyAlerted = await kv.get(alertKey) === 'true';
+                    if (alreadyAlerted) {
+                        console.log(`⏭️ Already alerted for ${result.serviceName} [${result.envName}], skipping`);
+                        continue;
+                    }
+
+                    const isPending = await kv.get(pendingKey) === 'true';
+                    if (isPending) {
+                        // Second consecutive DOWN — confirmed, send alert
+                        console.log(`✅ Confirmed DOWN (2nd check): ${result.serviceName} [${result.envName}]`);
+                        confirmedFailingEnvs.push(result);
+                        await kv.del(pendingKey);
+                        await kv.set(alertKey, 'true', { ex: 86400 }); // Re-alert after 24h
+                    } else {
+                        // First time DOWN — mark as pending, wait for next run to confirm
+                        console.log(`⏳ First DOWN detected for ${result.serviceName} [${result.envName}] — waiting for confirmation`);
+                        await kv.set(pendingKey, 'true', { ex: 1800 }); // Pending expires in 30 min
                     }
                 } catch (kvError) {
                     console.error(`KV error for down alert ${result.serviceName}:`, kvError);
+                    // On KV error fall back to immediate alert
+                    confirmedFailingEnvs.push(result);
                 }
             }
 
-            if (newFailingEnvs.length > 0) {
-                console.log(`🚀 Sending new DOWN alert for ${serviceName}`);
+            if (confirmedFailingEnvs.length > 0) {
+                console.log(`🚀 Sending confirmed DOWN alert for ${serviceName}`);
                 await sendTeamsAlert({
                     serviceName,
-                    failingEnvs: newFailingEnvs.map(e => ({
+                    failingEnvs: confirmedFailingEnvs.map(e => ({
                         envName: e.envName,
                         url: e.url,
                         statusCode: e.statusCode
@@ -150,19 +169,27 @@ export async function GET(request: Request) {
             }
         }
 
-        // Handle RECOVERED environments
+        // Handle RECOVERED / false-alarm environments
         if (upEnvs.length > 0) {
             const newlyRecoveredEnvs: typeof upEnvs = [];
 
             for (const result of upEnvs) {
-                const redisKey = `alert:down:${result.serviceName}:${result.envName}`;
+                const alertKey   = `alert:down:${result.serviceName}:${result.envName}`;
+                const pendingKey = `alert:pending:${result.serviceName}:${result.envName}`;
 
                 try {
                     if (hasKV) {
-                        const wasDown = await kv.get(redisKey) === 'true';
+                        // Clear pending if it was a false alarm (recovered before confirmation)
+                        const wasPending = await kv.get(pendingKey) === 'true';
+                        if (wasPending) {
+                            console.log(`🔕 False alarm cleared for ${result.serviceName} [${result.envName}]`);
+                            await kv.del(pendingKey);
+                        }
+
+                        const wasDown = await kv.get(alertKey) === 'true';
                         if (wasDown) {
                             newlyRecoveredEnvs.push(result);
-                            await kv.del(redisKey); // Clear the DOWN state
+                            await kv.del(alertKey); // Clear the DOWN state
                         }
                     }
                 } catch (kvError) {
