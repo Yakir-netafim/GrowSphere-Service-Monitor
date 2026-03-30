@@ -5,13 +5,42 @@ import { sendTeamsAlert, sendTeamsRecoveryAlert } from '@/lib/notifications';
 import { CheckResult } from '@/app/types';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+// Increased to 300s to accommodate the 30-second in-run retry delay
+export const maxDuration = 300;
 
+// ─── Helper: single endpoint check ───────────────────────────────────────────
+async function checkEndpoint(url: string): Promise<{ isUp: boolean; statusCode: number; duration: number }> {
+    const start = Date.now();
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+        const res = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+        clearTimeout(timeoutId);
+
+        let isUp = res.ok;
+        try {
+            const json = await res.json();
+            if (json?.status === 'Healthy') isUp = true;
+            else if (json?.status === 'Unhealthy' || json?.status === 'Degraded') isUp = false;
+        } catch {
+            // Not JSON — rely on HTTP status only
+        }
+
+        return { isUp, statusCode: res.status, duration: Date.now() - start };
+    } catch {
+        return { isUp: false, statusCode: 0, duration: Date.now() - start };
+    }
+}
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// ─── Main cron handler ────────────────────────────────────────────────────────
 export async function GET(request: Request) {
     const startOverall = Date.now();
     const url = new URL(request.url);
 
-    // 1. Authentication - support both Vercel (Authorization header) and GitHub Actions (token param)
+    // 1. Authentication — support both Vercel (Authorization header) and GitHub Actions (token param)
     const token = url.searchParams.get('token');
     const authHeader = request.headers.get('authorization');
     const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -32,76 +61,77 @@ export async function GET(request: Request) {
             const lastRunStr = await kv.get<string>('last-health-check-run');
             if (lastRunStr) {
                 const lastRunTime = parseInt(lastRunStr, 10);
-                // If last run was less than 8 minutes ago, skip this run
                 if (Date.now() - lastRunTime < 8 * 60 * 1000) {
                     console.log('⏭️ Skipping duplicate cron run (ran recently)');
                     return NextResponse.json({ message: 'Skipped duplicate run' });
                 }
             }
-            await kv.set('last-health-check-run', Date.now().toString(), { ex: 600 }); // Expire after 10 mins
+            await kv.set('last-health-check-run', Date.now().toString(), { ex: 600 });
         } catch (e) {
             console.error('KV duplicate check failed:', e);
         }
     }
 
-    // 3. Parallel fetching
+    // 3. First-pass: check all endpoints in parallel
     const checksInput = services.flatMap((s) =>
         s.environments.map((e) => ({ serviceId: s.id, serviceName: s.name, envName: e.name, url: e.url }))
     );
 
-    const checkPromises = checksInput.map(async (c) => {
-        const start = Date.now();
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000);
+    console.log(`🔍 Pass 1: checking ${checksInput.length} endpoints...`);
 
-            const res = await fetch(c.url, {
-                signal: controller.signal,
-                cache: 'no-store',
-            });
-            clearTimeout(timeoutId);
-
-            let isUp = res.ok;
-            try {
-                const json = await res.json();
-                if (json?.status === 'Healthy') isUp = true;
-                else if (json?.status === 'Unhealthy' || json?.status === 'Degraded') isUp = false;
-            } catch {
-                // Not JSON
-            }
-
+    const pass1Results: CheckResult[] = await Promise.all(
+        checksInput.map(async (c) => {
+            const { isUp, statusCode, duration } = await checkEndpoint(c.url);
             return {
                 serviceName: c.serviceName,
                 envName: c.envName,
                 url: c.url,
                 status: isUp ? 'UP' : 'DOWN',
-                statusCode: res.status,
-                duration: Date.now() - start,
+                statusCode,
+                duration,
                 timestamp: new Date().toISOString(),
             } as CheckResult;
-        } catch {
-            return {
-                serviceName: c.serviceName,
-                envName: c.envName,
-                url: c.url,
-                status: 'DOWN',
-                statusCode: 0,
-                duration: Date.now() - start,
-                timestamp: new Date().toISOString(),
-            } as CheckResult;
-        }
-    });
+        })
+    );
 
-    const resultsRaw = await Promise.allSettled(checkPromises);
-    const allResults = resultsRaw
-        .filter((r): r is PromiseFulfilledResult<CheckResult> => r.status === 'fulfilled')
-        .map(r => r.value);
+    // 4. In-run retry: re-check ONLY the DOWN endpoints after 30 seconds
+    //    This eliminates transient blips (network hiccups, brief restarts) within the same run.
+    const firstPassDown = pass1Results.filter(r => r.status === 'DOWN');
+    let allResults: CheckResult[] = [...pass1Results.filter(r => r.status === 'UP')];
 
-    // 4. Alerting Logic (Failures + Recoveries)
-    // Uses a double-confirmation pattern:
-    //   Run 1: Service is DOWN → saved as "pending" in KV, no alert sent yet
-    //   Run 2: Service is still DOWN → confirmed! Teams alert sent
-    //   If service recovers while pending → pending cleared, no alert (false alarm avoided)
+    if (firstPassDown.length > 0) {
+        console.log(`⏳ ${firstPassDown.length} endpoint(s) DOWN in pass 1 — waiting 30s before retry...`);
+        await sleep(30_000);
+
+        console.log(`🔍 Pass 2 (retry): re-checking ${firstPassDown.length} failed endpoint(s)...`);
+        const pass2Results: CheckResult[] = await Promise.all(
+            firstPassDown.map(async (c) => {
+                const { isUp, statusCode, duration } = await checkEndpoint(c.url);
+                if (isUp) {
+                    console.log(`✅ ${c.serviceName} [${c.envName}] recovered on retry — ignoring (transient blip)`);
+                } else {
+                    console.log(`❌ ${c.serviceName} [${c.envName}] still DOWN after retry`);
+                }
+                return {
+                    ...c,
+                    status: isUp ? 'UP' : 'DOWN',
+                    statusCode,
+                    duration,
+                    timestamp: new Date().toISOString(),
+                } as CheckResult;
+            })
+        );
+        allResults = [...allResults, ...pass2Results];
+    }
+
+    // 5. Alerting Logic (Failures + Recoveries)
+    //    Uses a double-confirmation pattern across cron runs:
+    //      Run 1: Service DOWN after retry → save as "pending" in KV, no alert yet
+    //      Run 2: Service still DOWN after retry → confirmed! send Teams alert
+    //      Recovery while pending → clear pending, no alert (false alarm)
+    //
+    //    Combined with the in-run retry, this means 3 independent checks are
+    //    required before any alert fires.
     const serviceGroups = allResults.reduce((acc, result) => {
         if (!acc[result.serviceName]) acc[result.serviceName] = [];
         acc[result.serviceName].push(result);
@@ -113,63 +143,62 @@ export async function GET(request: Request) {
     for (const serviceName in serviceGroups) {
         const results = serviceGroups[serviceName];
         const downEnvs = results.filter(r => r.status === 'DOWN');
-        const upEnvs = results.filter(r => r.status === 'UP');
+        const upEnvs   = results.filter(r => r.status === 'UP');
 
-        // Handle DOWN environments
+        // ── Handle DOWN environments ──────────────────────────────────────────
         if (downEnvs.length > 0) {
             const confirmedFailingEnvs: typeof downEnvs = [];
 
             for (const result of downEnvs) {
                 downServices.push(result);
-                const alertKey    = `alert:down:${result.serviceName}:${result.envName}`;
-                const pendingKey  = `alert:pending:${result.serviceName}:${result.envName}`;
+                const alertKey   = `alert:down:${result.serviceName}:${result.envName}`;
+                const pendingKey = `alert:pending:${result.serviceName}:${result.envName}`;
 
                 try {
                     if (!hasKV) {
-                        // No KV — send immediately (legacy behaviour)
+                        // No KV available — fall back to immediate alert
                         confirmedFailingEnvs.push(result);
                         continue;
                     }
 
                     const alreadyAlerted = await kv.get(alertKey) === 'true';
                     if (alreadyAlerted) {
-                        console.log(`⏭️ Already alerted for ${result.serviceName} [${result.envName}], skipping`);
+                        console.log(`⏭️ Already alerted: ${result.serviceName} [${result.envName}]`);
                         continue;
                     }
 
                     const isPending = await kv.get(pendingKey) === 'true';
                     if (isPending) {
-                        // Second consecutive DOWN — confirmed, send alert
-                        console.log(`✅ Confirmed DOWN (2nd check): ${result.serviceName} [${result.envName}]`);
+                        // 2nd consecutive cron run still DOWN → send alert
+                        console.log(`🔴 Confirmed DOWN across 2 runs: ${result.serviceName} [${result.envName}]`);
                         confirmedFailingEnvs.push(result);
                         await kv.del(pendingKey);
-                        await kv.set(alertKey, 'true', { ex: 86400 }); // Re-alert after 24h
+                        await kv.set(alertKey, 'true', { ex: 86400 }); // Re-alert after 24 h
                     } else {
-                        // First time DOWN — mark as pending, wait for next run to confirm
-                        console.log(`⏳ First DOWN detected for ${result.serviceName} [${result.envName}] — waiting for confirmation`);
-                        await kv.set(pendingKey, 'true', { ex: 1800 }); // Pending expires in 30 min
+                        // 1st cron run DOWN → mark pending, wait for next run
+                        console.log(`⏳ 1st confirmation: ${result.serviceName} [${result.envName}] — queued for next run`);
+                        await kv.set(pendingKey, 'true', { ex: 1800 }); // Expires in 30 min
                     }
                 } catch (kvError) {
-                    console.error(`KV error for down alert ${result.serviceName}:`, kvError);
-                    // On KV error fall back to immediate alert
-                    confirmedFailingEnvs.push(result);
+                    console.error(`KV error for ${result.serviceName}:`, kvError);
+                    confirmedFailingEnvs.push(result); // Fallback: alert immediately
                 }
             }
 
             if (confirmedFailingEnvs.length > 0) {
-                console.log(`🚀 Sending confirmed DOWN alert for ${serviceName}`);
+                console.log(`🚨 Sending Teams alert for ${serviceName} (confirmed across 3 checks)`);
                 await sendTeamsAlert({
                     serviceName,
                     failingEnvs: confirmedFailingEnvs.map(e => ({
                         envName: e.envName,
                         url: e.url,
-                        statusCode: e.statusCode
-                    }))
+                        statusCode: e.statusCode,
+                    })),
                 });
             }
         }
 
-        // Handle RECOVERED / false-alarm environments
+        // ── Handle RECOVERED / false-alarm environments ───────────────────────
         if (upEnvs.length > 0) {
             const newlyRecoveredEnvs: typeof upEnvs = [];
 
@@ -179,38 +208,37 @@ export async function GET(request: Request) {
 
                 try {
                     if (hasKV) {
-                        // Clear pending if it was a false alarm (recovered before confirmation)
                         const wasPending = await kv.get(pendingKey) === 'true';
                         if (wasPending) {
-                            console.log(`🔕 False alarm cleared for ${result.serviceName} [${result.envName}]`);
+                            console.log(`🔕 False alarm cleared: ${result.serviceName} [${result.envName}]`);
                             await kv.del(pendingKey);
                         }
 
                         const wasDown = await kv.get(alertKey) === 'true';
                         if (wasDown) {
                             newlyRecoveredEnvs.push(result);
-                            await kv.del(alertKey); // Clear the DOWN state
+                            await kv.del(alertKey);
                         }
                     }
                 } catch (kvError) {
-                    console.error(`KV error for recovery alert ${result.serviceName}:`, kvError);
+                    console.error(`KV recovery error for ${result.serviceName}:`, kvError);
                 }
             }
 
             if (newlyRecoveredEnvs.length > 0) {
-                console.log(`✅ Sending RECOVERY alert for ${serviceName}`);
+                console.log(`💚 Sending RECOVERY alert for ${serviceName}`);
                 await sendTeamsRecoveryAlert({
                     serviceName,
                     recoveredEnvs: newlyRecoveredEnvs.map(e => ({
                         envName: e.envName,
-                        url: e.url
-                    }))
+                        url: e.url,
+                    })),
                 });
             }
         }
     }
 
-    // Save general last-check timestamp
+    // Save last-check timestamp
     if (hasKV) {
         try {
             await kv.set('last_check', new Date().toISOString());
@@ -219,17 +247,19 @@ export async function GET(request: Request) {
         }
     }
 
-    console.log(`⏱️ Cron finished in ${Date.now() - startOverall}ms`);
+    const elapsed = Date.now() - startOverall;
+    console.log(`⏱️ Cron finished in ${elapsed}ms`);
 
     return NextResponse.json({
         summary: `Checked ${allResults.length} endpoints`,
-        up: allResults.filter((r) => r.status === 'UP').length,
+        up: allResults.filter(r => r.status === 'UP').length,
         down: downServices.length,
-        downServices: downServices.map((r) => ({
+        downServices: downServices.map(r => ({
             service: r.serviceName,
             env: r.envName,
             statusCode: r.statusCode,
         })),
         timestamp: new Date().toISOString(),
+        elapsed: `${elapsed}ms`,
     });
 }
