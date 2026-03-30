@@ -150,7 +150,7 @@ export const services: ServiceConfig[] = [
             { name: 'Dev2', url: 'https://reportapi-dev2.k8s.growsphere.netafim.com/health' },
             { name: 'QA1', url: 'https://reportapi-qa1.k8s.growsphere.netafim.com/health' },
             { name: 'STAG', url: 'https://reportapi-stag.k8s.growsphere.netafim.com/health' },
-            { name: 'PROD', url: 'https://reportapi.k8s.growsphere.netafim.com/health' },
+            { name: 'PROD', url: 'https://prod-netbeatvx-reportapi-app-weu.azurewebsites.net/health' },
         ],
     },
     {
