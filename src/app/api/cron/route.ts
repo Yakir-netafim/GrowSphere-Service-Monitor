@@ -15,7 +15,14 @@ async function checkEndpoint(url: string): Promise<{ isUp: boolean; statusCode: 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-        const res = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+        const res = await fetch(url, {
+            signal: controller.signal,
+            cache: 'no-store',
+            headers: {
+                'Accept': 'application/json, text/plain, */*',
+                'User-Agent': 'StatusMonitor/1.0 (Vercel Cron)'
+            }
+        });
         clearTimeout(timeoutId);
 
         let isUp = res.ok;
@@ -31,6 +38,21 @@ async function checkEndpoint(url: string): Promise<{ isUp: boolean; statusCode: 
     } catch {
         return { isUp: false, statusCode: 0, duration: Date.now() - start };
     }
+}
+
+// Helper to run promises in chunks to prevent Rate Limiting / 503 throttling on K8s Ingress
+async function runInChunks<T, R>(items: T[], chunkSize: number, asyncFn: (item: T) => Promise<R>): Promise<R[]> {
+    const results: R[] = [];
+    for (let i = 0; i < items.length; i += chunkSize) {
+        const chunk = items.slice(i, i + chunkSize);
+        const chunkResults = await Promise.all(chunk.map(asyncFn));
+        results.push(...chunkResults);
+        // Delay slightly between chunks
+        if (i + chunkSize < items.length) {
+            await sleep(200);
+        }
+    }
+    return results;
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -79,20 +101,18 @@ export async function GET(request: Request) {
 
     console.log(`🔍 Pass 1: checking ${checksInput.length} endpoints...`);
 
-    const pass1Results: CheckResult[] = await Promise.all(
-        checksInput.map(async (c) => {
-            const { isUp, statusCode, duration } = await checkEndpoint(c.url);
-            return {
-                serviceName: c.serviceName,
-                envName: c.envName,
-                url: c.url,
-                status: isUp ? 'UP' : 'DOWN',
-                statusCode,
-                duration,
-                timestamp: new Date().toISOString(),
-            } as CheckResult;
-        })
-    );
+    const pass1Results: CheckResult[] = await runInChunks(checksInput, 5, async (c) => {
+        const { isUp, statusCode, duration } = await checkEndpoint(c.url);
+        return {
+            serviceName: c.serviceName,
+            envName: c.envName,
+            url: c.url,
+            status: isUp ? 'UP' : 'DOWN',
+            statusCode,
+            duration,
+            timestamp: new Date().toISOString(),
+        } as CheckResult;
+    });
 
     // 4. In-run retry: re-check ONLY the DOWN endpoints after 30 seconds
     //    This eliminates transient blips (network hiccups, brief restarts) within the same run.
@@ -104,23 +124,21 @@ export async function GET(request: Request) {
         await sleep(30_000);
 
         console.log(`🔍 Pass 2 (retry): re-checking ${firstPassDown.length} failed endpoint(s)...`);
-        const pass2Results: CheckResult[] = await Promise.all(
-            firstPassDown.map(async (c) => {
-                const { isUp, statusCode, duration } = await checkEndpoint(c.url);
-                if (isUp) {
-                    console.log(`✅ ${c.serviceName} [${c.envName}] recovered on retry — ignoring (transient blip)`);
-                } else {
-                    console.log(`❌ ${c.serviceName} [${c.envName}] still DOWN after retry`);
-                }
-                return {
-                    ...c,
-                    status: isUp ? 'UP' : 'DOWN',
-                    statusCode,
-                    duration,
-                    timestamp: new Date().toISOString(),
-                } as CheckResult;
-            })
-        );
+        const pass2Results: CheckResult[] = await runInChunks(firstPassDown, 5, async (c) => {
+            const { isUp, statusCode, duration } = await checkEndpoint(c.url);
+            if (isUp) {
+                console.log(`✅ ${c.serviceName} [${c.envName}] recovered on retry — ignoring (transient blip)`);
+            } else {
+                console.log(`❌ ${c.serviceName} [${c.envName}] still DOWN after retry`);
+            }
+            return {
+                ...c,
+                status: isUp ? 'UP' : 'DOWN',
+                statusCode,
+                duration,
+                timestamp: new Date().toISOString(),
+            } as CheckResult;
+        });
         allResults = [...allResults, ...pass2Results];
     }
 

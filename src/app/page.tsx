@@ -9,7 +9,14 @@ async function checkService(url: string): Promise<{ isUp: boolean; statusCode: n
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+    const res = await fetch(url, {
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'StatusMonitor/1.0 (Vercel Node.js)'
+      }
+    });
     clearTimeout(timeoutId);
     // Try to parse JSON body — .NET health endpoints sometimes return 503
     // even when the body says {"status":"Healthy"}
@@ -30,22 +37,35 @@ async function checkService(url: string): Promise<{ isUp: boolean; statusCode: n
   }
 }
 
+// Helper to run promises in chunks to prevent Rate Limiting / 503 throttling on K8s Ingress
+async function runInChunks<T, R>(items: T[], chunkSize: number, asyncFn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    const chunkResults = await Promise.all(chunk.map(asyncFn));
+    results.push(...chunkResults);
+    // Add a tiny 200ms delay between chunks to help WAFs digest
+    if (i + chunkSize < items.length) {
+      await new Promise((res) => setTimeout(res, 200));
+    }
+  }
+  return results;
+}
+
 export default async function Dashboard() {
   const checksInput = services.flatMap((s) =>
     s.environments.map((e) => ({ serviceId: s.id, serviceName: s.name, env: e.name, url: e.url }))
   );
 
-  // Run health checks and fetch last cron timestamp in parallel
   // KV is only available in production (Vercel). Fall back to null locally.
   const hasKV = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
 
+  // Run health checks in chunks of 5 and fetch last cron timestamp in parallel
   const [results, lastCheck] = await Promise.all([
-    Promise.all(
-      checksInput.map(async (c) => ({
-        ...c,
-        ...(await checkService(c.url)),
-      }))
-    ),
+    runInChunks(checksInput, 5, async (c) => ({
+      ...c,
+      ...(await checkService(c.url)),
+    })),
     hasKV ? kv.get<string>('last_check').catch(() => null) : Promise.resolve(null),
   ]);
 
