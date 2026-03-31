@@ -3,23 +3,26 @@ import DashboardClient from '@/app/components/DashboardClient';
 import { kv } from '@vercel/kv';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0; // Ensure no caching
 
-async function checkService(url: string): Promise<{ isUp: boolean; statusCode: number; duration: number }> {
+async function checkService(url: string, retryCount = 0): Promise<{ isUp: boolean; statusCode: number; duration: number; error?: string }> {
   const start = Date.now();
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout for dashboard checks
+
     const res = await fetch(url, {
       signal: controller.signal,
       cache: 'no-store',
       headers: {
         'Accept': 'application/json, text/plain, */*',
-        'User-Agent': 'StatusMonitor/1.0 (Vercel Node.js)'
+        'User-Agent': 'StatusMonitor/1.0 (Vercel Node.js Dashboard)'
       }
     });
+
     clearTimeout(timeoutId);
-    // Try to parse JSON body — .NET health endpoints sometimes return 503
-    // even when the body says {"status":"Healthy"}
+
+    // Try to parse JSON body
     try {
       const json = await res.json();
       if (json?.status === 'Healthy') {
@@ -29,24 +32,45 @@ async function checkService(url: string): Promise<{ isUp: boolean; statusCode: n
         return { isUp: false, statusCode: res.status, duration: Date.now() - start };
       }
     } catch {
-      // Not JSON — fall through to HTTP status
+      // Not JSON
     }
-    return { isUp: res.ok, statusCode: res.status, duration: Date.now() - start };
-  } catch {
-    return { isUp: false, statusCode: 0, duration: Date.now() - start };
+
+    if (res.ok) {
+      return { isUp: true, statusCode: res.status, duration: Date.now() - start };
+    }
+
+    // If not OK and it's some generic error, maybe retry once
+    if (retryCount === 0 && (res.status >= 500 || res.status === 429)) {
+       await new Promise(resolve => setTimeout(resolve, 500));
+       return checkService(url, 1);
+    }
+
+    return { isUp: false, statusCode: res.status, duration: Date.now() - start };
+  } catch (err: any) {
+    // If it's a real timeout or network reset, retry once immediately
+    if (retryCount === 0) {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      return checkService(url, 1);
+    }
+
+    const duration = Date.now() - start;
+    let errorMsg = 'TIMEOUT';
+    if (err.name === 'AbortError') errorMsg = 'TIMEOUT';
+    else if (err.message) errorMsg = err.message.toUpperCase();
+
+    return { isUp: false, statusCode: 0, duration, error: errorMsg };
   }
 }
 
-// Helper to run promises in chunks to prevent Rate Limiting / 503 throttling on K8s Ingress
+// Helper to run promises in chunks
 async function runInChunks<T, R>(items: T[], chunkSize: number, asyncFn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = [];
   for (let i = 0; i < items.length; i += chunkSize) {
     const chunk = items.slice(i, i + chunkSize);
     const chunkResults = await Promise.all(chunk.map(asyncFn));
     results.push(...chunkResults);
-    // Add a tiny 200ms delay between chunks to help WAFs digest
     if (i + chunkSize < items.length) {
-      await new Promise((res) => setTimeout(res, 200));
+      await new Promise((res) => setTimeout(res, 100)); // Reduced delay
     }
   }
   return results;
@@ -57,12 +81,10 @@ export default async function Dashboard() {
     s.environments.map((e) => ({ serviceId: s.id, serviceName: s.name, env: e.name, url: e.url }))
   );
 
-  // KV is only available in production (Vercel). Fall back to null locally.
   const hasKV = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
 
-  // Run health checks in chunks of 5 and fetch last cron timestamp in parallel
   const [results, lastCheck] = await Promise.all([
-    runInChunks(checksInput, 5, async (c) => ({
+    runInChunks(checksInput, 10, async (c) => ({ // Increased chunk size to 10 for faster parallel checks
       ...c,
       ...(await checkService(c.url)),
     })),
@@ -71,3 +93,4 @@ export default async function Dashboard() {
 
   return <DashboardClient services={services} results={results} lastCheck={lastCheck} />;
 }
+

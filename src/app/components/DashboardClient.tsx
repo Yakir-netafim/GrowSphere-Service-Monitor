@@ -16,6 +16,7 @@ interface ServiceResult {
     isUp: boolean;
     statusCode: number;
     duration: number;
+    error?: string;
 }
 
 interface Props {
@@ -194,8 +195,9 @@ export default function DashboardClient({ services, results, lastCheck }: Props)
 
     const doRefresh = () => {
         setIsRefreshing(true);
-        router.refresh();
-        setCountdown(REFRESH_INTERVAL_SECONDS);
+        // Using window.location.reload() instead of router.refresh() to satisfy the user's
+        // expectation of a "clean slate" and to bypass any possible client-side caching.
+        window.location.reload();
     };
 
     // Trigger refresh when countdown hits 0 (wraps back to REFRESH_INTERVAL_SECONDS)
@@ -466,9 +468,12 @@ export default function DashboardClient({ services, results, lastCheck }: Props)
                                                                     <CheckCircle className="w-3.5 h-3.5" /> UP
                                                                 </span>
                                                             ) : (
-                                                                <span className="flex items-center gap-1 text-red-400 text-xs font-bold">
+                                                                <span 
+                                                                    className="flex items-center gap-1 text-red-400 text-xs font-bold cursor-help"
+                                                                    title={result?.error || (result?.statusCode === 0 ? 'Connection Timeout' : `Error ${result?.statusCode}`)}
+                                                                >
                                                                     <XCircle className="w-3.5 h-3.5" />
-                                                                    {result?.statusCode === 0 ? 'TIMEOUT' : `${result?.statusCode ?? 'ERR'}`}
+                                                                    {result?.statusCode === 0 ? (result?.error || 'TIMEOUT') : `${result?.statusCode ?? 'ERR'}`}
                                                                 </span>
                                                             )}
                                                         </div>
