@@ -4,6 +4,8 @@ import { kv } from '@vercel/kv';
 import { sendTeamsAlert, sendTeamsRecoveryAlert } from '@/lib/notifications';
 import { CheckResult } from '@/app/types';
 
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'; // Ignore SSL certificate errors for internal Kubernetes APIs
+
 export const dynamic = 'force-dynamic';
 // Increased to 300s to accommodate the 30-second in-run retry delay
 export const maxDuration = 300;
