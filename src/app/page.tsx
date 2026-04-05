@@ -5,6 +5,8 @@ import { kv } from '@vercel/kv';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0; // Ensure no caching
 
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'; // Ignore SSL errors for k8s internal health checks
+
 async function checkService(url: string, retryCount = 0): Promise<{ isUp: boolean; statusCode: number; duration: number; error?: string }> {
   const start = Date.now();
   try {

@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     const result = await getServiceInsights(appId);
 
     if (!result.available) {
-        return NextResponse.json(result, { status: 503 });
+        return NextResponse.json(result, { status: 200 }); // Return 200 even if empty to avoid console errors
     }
 
     return NextResponse.json(result, {

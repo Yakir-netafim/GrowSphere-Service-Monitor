@@ -172,8 +172,14 @@ export default function DashboardClient({ services, results, lastCheck }: Props)
     const [showOnlyDown, setShowOnlyDown] = useState(false);
     const [countdown, setCountdown] = useState(REFRESH_INTERVAL_SECONDS);
     const [isRefreshing, setIsRefreshing] = useState(false);
-    const [lastUpdatedAt, setLastUpdatedAt] = useState(() => new Date().toISOString());
-    const [currentTime, setCurrentTime] = useState(() => new Date());
+    const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+    const [currentTime, setCurrentTime] = useState<Date | null>(null);
+
+    // Initial sync
+    useEffect(() => {
+        setLastUpdatedAt(new Date().toISOString());
+        setCurrentTime(new Date());
+    }, []);
 
     // Sync lastUpdatedAt when results change
     useEffect(() => {
@@ -246,17 +252,17 @@ export default function DashboardClient({ services, results, lastCheck }: Props)
         ' · ' + new Date(lastCheck).toLocaleDateString('en-GB')
         : 'Not yet checked by Cron';
 
-    const lastUpdatedFormatted = new Date(lastUpdatedAt).toLocaleTimeString('en-GB', {
+    const lastUpdatedFormatted = lastUpdatedAt ? new Date(lastUpdatedAt).toLocaleTimeString('en-GB', {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
-    });
+    }) : '--:--:--';
 
-    const currentTimeFormatted = currentTime.toLocaleTimeString('en-GB', {
+    const currentTimeFormatted = currentTime ? currentTime.toLocaleTimeString('en-GB', {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
-    });
+    }) : '--:--:--';
 
     return (
         <main className="min-h-screen bg-slate-950 text-white">
